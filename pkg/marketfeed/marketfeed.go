@@ -27,6 +27,7 @@ type MarketFeedInterface interface {
 	Authorize(ctx context.Context) error
 	SubscribeInstruments(ctx context.Context, instruments []Instrument) error
 	ProcessData(ctx context.Context)
+	Disconnect() error
 }
 
 type Instrument struct {
@@ -100,4 +101,26 @@ func (mf *MarketFeed) createHeaderPacket(feedRequestCode uint16, messageLength u
     // Already initialized to zero, so no need to explicitly set
     
     return header
+}
+
+func (mf *MarketFeed) Disconnect() error {
+	if mf.ws == nil {
+		return nil // Already disconnected or never connected
+	}
+
+	// Close the WebSocket connection
+	err := mf.ws.Close()
+	if err != nil {
+		return fmt.Errorf("error closing WebSocket connection: %w", err)
+	}
+
+	// Call the onClose callback if it exists
+	if mf.onClose != nil {
+		if err := mf.onClose(nil); err != nil {
+			return fmt.Errorf("onClose callback failed: %w", err)
+		}
+	}
+
+	mf.ws = nil // Reset the WebSocket connection
+	return nil
 }
