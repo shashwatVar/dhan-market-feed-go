@@ -2,11 +2,11 @@ package marketfeed
 
 import (
 	"context"
-	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/gorilla/websocket"
-	"github.com/shashwatVar/dhan-market-feed-go/internal/utils"
 )
 
 
@@ -14,66 +14,76 @@ const (
 	maxInstrumentsPerBatch = 100
 )
 
-// this can also be used to unsubscribe -> just need to change the feedCode 
+type SubscriptionRequest struct {
+	RequestCode      int           `json:"RequestCode"`
+	InstrumentCount  int           `json:"InstrumentCount"`
+	InstrumentList   []SubInstrument `json:"InstrumentList"`
+}
+
+type SubInstrument struct {
+	ExchangeSegment string `json:"ExchangeSegment"`
+	SecurityID      string `json:"SecurityId"`
+}
+
 func (mf *MarketFeed) SubscribeInstruments(ctx context.Context, instruments []Instrument) error {
-	// Group instruments by feedType
-	instrumentsByFeedType := make(map[uint16][]Instrument)
-	for _, instrument := range instruments {
-		instrumentsByFeedType[instrument.FeedType] = append(instrumentsByFeedType[instrument.FeedType], instrument)
-	}
+	// Group instruments into batches of 100
+	for i := 0; i < len(instruments); i += maxInstrumentsPerBatch {
+		end := i + maxInstrumentsPerBatch
+		if end > len(instruments) {
+			end = len(instruments)
+		}
+		batch := instruments[i:end]
 
-	// Subscribe to each feedType batch
-	for feedType, instrumentBatch := range instrumentsByFeedType {
-		for i := 0; i < len(instrumentBatch); i += maxInstrumentsPerBatch {
-			end := i + maxInstrumentsPerBatch
-			if end > len(instrumentBatch) {
-				end = len(instrumentBatch)
+		instrumentList := make([]SubInstrument, len(batch))
+		for j, inst := range batch {
+			instrumentList[j] = SubInstrument{
+				ExchangeSegment: getExchangeSegmentString(inst.ExchangeSegment),
+				SecurityID:      inst.SecurityID,
 			}
-			batch := instrumentBatch[i:end]
-			
-			packet := mf.createSubscribePacket(feedType, batch)
+		}
 
-			err := mf.ws.WriteMessage(websocket.BinaryMessage, packet)
-			if err != nil {
-				return fmt.Errorf("failed to send subscription packet for feedType %d: %w", feedType, err)
-			}
+		request := SubscriptionRequest{
+			RequestCode:     15, // Use Ticker feed type for now
+			InstrumentCount: len(batch),
+			InstrumentList:  instrumentList,
+		}
+
+		jsonData, err := json.Marshal(request)
+		if err != nil {
+			return fmt.Errorf("failed to marshal subscription request: %w", err)
+		}
+
+		// Add debug logging
+		log.Printf("Sending subscription request: %s", string(jsonData))
+
+		err = mf.ws.WriteMessage(websocket.TextMessage, jsonData)
+		if err != nil {
+			return fmt.Errorf("failed to send subscription request: %w", err)
 		}
 	}
 	return nil
 }
 
-
-func (mf *MarketFeed) createSubscribePacket(feedType uint16, instruments []Instrument) []byte {
-	numInstruments := len(instruments)
-	messageLength := uint16(83 + 4 + numInstruments*21)
-	
-	packet := make([]byte, 83 + 4 + 100*21)
-	
-	// Create and copy the header
-	header := mf.createHeaderPacket(feedType, messageLength, mf.clientID)
-	copy(packet[:83], header)
-
-	// Number of Instruments (4 bytes)
-	binary.LittleEndian.PutUint32(packet[83:87], uint32(numInstruments))
-
-	// Instrument Subscription Packets
-	for i, instrument := range instruments {
-		subscriptionPacket := mf.createInstrumentSubscriptionPacket(instrument.ExchangeSegment, instrument.SecurityID)
-		copy(packet[87+(i*21):108+(i*21)], subscriptionPacket)
+func getExchangeSegmentString(segment uint16) string {
+	switch segment {
+	case 0:
+		return "IDX_I"
+	case 1:
+		return "NSE_EQ"
+	case 2:
+		return "NSE_FNO"
+	case 3:
+		return "NSE_CURRENCY"
+	case 4:
+		return "BSE_EQ"
+	case 5:
+		return "MCX_COMM"
+	case 7:
+		return "BSE_CURRENCY"
+	case 8:
+		return "BSE_FNO"
+	default:
+		log.Printf("Warning: Unknown exchange segment: %d", segment)
+		return fmt.Sprintf("UNKNOWN_%d", segment)
 	}
-
-	return packet
-}
-
-func (mf *MarketFeed) createInstrumentSubscriptionPacket(exchangeSegment uint16, securityId string) []byte {
-	messageLength := uint16(21) // 1 (Exchange Segment) + 20 (Security ID)
-	packet := make([]byte, messageLength)
-
-	// Exchange Segment (1 byte)
-	packet[0] = byte(exchangeSegment)
-
-	// Security ID (20 bytes)
-	copy(packet[1:21], utils.PadOrTruncate([]byte(securityId), 20))
-
-	return packet
 }

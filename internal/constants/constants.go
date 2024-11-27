@@ -1,8 +1,12 @@
 package constants
 
 const (
-    WSS_URL = "wss://api-feed.dhan.co"
-	Ticker = 15
-	Quote = 17
-	Depth = 19
+    WSS_URL_BASE = "wss://api-feed.dhan.co"
+    VERSION = "2"
+    AUTH_TYPE = "2"
+    
+    // Feed Types
+    Ticker = 15
+    Quote = 17 
+    Depth = 19
 )

@@ -3,6 +3,7 @@ package marketfeed
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -28,6 +29,7 @@ type MarketFeedInterface interface {
 	SubscribeInstruments(ctx context.Context, instruments []Instrument) error
 	ProcessData(ctx context.Context)
 	Disconnect() error
+	DisconnectGracefully() error
 }
 
 type Instrument struct {
@@ -49,8 +51,17 @@ func NewMarketFeed(clientID, accessToken string, instruments []Instrument,
 }
 
 func (mf *MarketFeed) Connect(ctx context.Context) error {
+	// Construct URL with query parameters
+	wsURL := fmt.Sprintf("%s?version=%s&token=%s&clientId=%s&authType=%s",
+		constants.WSS_URL_BASE,
+		constants.VERSION,
+		mf.accessToken,
+		mf.clientID,
+		constants.AUTH_TYPE,
+	)
+
 	// Connect to WebSocket server
-	c, _, err := websocket.DefaultDialer.DialContext(ctx, constants.WSS_URL, nil)
+	c, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to connect to WebSocket server: %w", err)
 	}
@@ -64,11 +75,8 @@ func (mf *MarketFeed) Connect(ctx context.Context) error {
 		return nil
 	})
 
-	err = mf.Authorize(ctx);
-	if err != nil {
-		return fmt.Errorf("failed to authorize: %w", err)
-	}
-
+	// No need for separate authorization in v2 since it's handled via URL params
+	
 	err = mf.SubscribeInstruments(ctx, mf.instruments)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to instruments: %w", err)
@@ -124,3 +132,28 @@ func (mf *MarketFeed) Disconnect() error {
 	mf.ws = nil // Reset the WebSocket connection
 	return nil
 }
+func (mf *MarketFeed) DisconnectGracefully() error {
+    if mf.ws == nil {
+        return nil
+    }
+
+    // Send disconnect request
+    request := struct {
+        RequestCode int `json:"RequestCode"`
+    }{
+        RequestCode: 16,
+    }
+
+    jsonData, err := json.Marshal(request)
+    if err != nil {
+        return fmt.Errorf("failed to marshal disconnect request: %w", err)
+    }
+
+    err = mf.ws.WriteMessage(websocket.TextMessage, jsonData)
+    if err != nil {
+        return fmt.Errorf("failed to send disconnect request: %w", err)
+    }
+
+    return mf.Disconnect()
+}
+
